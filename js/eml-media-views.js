@@ -1071,6 +1071,10 @@ window.eml = window.eml || { l10n: {} };
             // this.attachments.listenTo( this.controller, 'attachment:keydown:arrow',     this.attachments.arrowEvent );
             // this.attachments.listenTo( this.controller, 'attachment:details:shift-tab', this.attachments.restoreFocus );
 
+            // Quickfix found on https://wordpress.org/support/topic/potential-fix-wordpress-5-3-conflict-compatibility-error/
+            this.attachments.listenTo(this.collection, 'attachment:keydown:arrow', this.attachments.arrowEvent);
+            this.attachments.listenTo(this.collection, 'attachment:details:shift-tab', this.attachments.restoreFocus);
+
             this.views.add(this.attachments);
 
             if (this.controller.isModeActive('grid') ||
