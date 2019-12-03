@@ -1009,18 +1009,18 @@ window.eml = window.eml || {
             }
         },
 
-        createUploader: function() {
+        // createUploader: function() {
 
-            this.uploader = new media.view.UploaderInline({
-                controller: this.controller,
-                status: false,
-                message: this.controller.isModeActive('grid') || this.controller.isModeActive('eml-grid') ? '' : l10n.noItemsFound,
-                canClose: this.controller.isModeActive('grid') || this.controller.isModeActive('eml-grid')
-            });
+        //     this.uploader = new media.view.UploaderInline({
+        //         controller: this.controller,
+        //         status: false,
+        //         message: this.controller.isModeActive('grid') || this.controller.isModeActive('eml-grid') ? '' : l10n.noItemsFound,
+        //         canClose: this.controller.isModeActive('grid') || this.controller.isModeActive('eml-grid')
+        //     });
 
-            this.uploader.$el.addClass('hidden');
-            this.views.add(this.uploader);
-        },
+        //     this.uploader.$el.addClass('hidden');
+        //     this.views.add(this.uploader);
+        // },
 
         createAttachments: function() {
             this.attachments = new media.view.Attachments({
