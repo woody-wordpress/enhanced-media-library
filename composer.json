@@ -1,7 +1,7 @@
 {
     "name": "woody-wordpress/enhanced-media-library",
     "type": "wordpress-plugin",
-    "version": "2.7.2",
+    "version": "2.7.3",
     "description": "This plugin is a copy of enhanced-media-library 2.7.2 to allow compatiblity with wp 5.3",
     "license": "GPL-2.0",
     "authors": [{
