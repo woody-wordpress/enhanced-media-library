@@ -1,574 +1,260 @@
 <?php
 
-if ( ! defined( 'ABSPATH' ) ) {
-    exit; // Exit if accessed directly.
+if ( ! defined( 'ABSPATH' ) )
+    exit;
+
+
+
+/**
+ *  wpuxss_eml_taxonomies_validate
+ *
+ *  @type     callback function
+ *  @since    1.0
+ *  @created  28/09/13
+ */
+
+if ( ! function_exists( 'wpuxss_eml_taxonomies_validate' ) ) {
+
+    function wpuxss_eml_taxonomies_validate( $input ) {
+
+        if ( ! $input ) $input = array();
+
+
+        foreach ( $input as $taxonomy => $params ) {
+
+            $sanitized_taxonomy = sanitize_key( $taxonomy );
+
+            if ( isset( $params['create_taxonomy'] ) ) {
+
+                unset( $input[$taxonomy]['create_taxonomy'] );
+
+                if ( taxonomy_exists( $sanitized_taxonomy ) ) {
+
+                    unset( $input[$taxonomy] );
+                    continue;
+                }
+            }
+
+
+            if ( ! empty( $sanitized_taxonomy ) ) {
+
+                $input[$sanitized_taxonomy] = $input[$taxonomy];
+                unset( $input[$taxonomy] );
+                $taxonomy = $sanitized_taxonomy;
+            }
+            else {
+                unset( $input[$taxonomy] );
+                continue;
+            }
+
+
+            $input[$taxonomy]['eml_media'] = isset( $params['eml_media'] ) && !! $params['eml_media'] ? 1 : 0;
+
+            if ( $input[$taxonomy]['eml_media'] ) {
+                $input[$taxonomy]['hierarchical'] = isset($params['hierarchical']) && !! $params['hierarchical'] ? 1 : 0;
+                $input[$taxonomy]['show_in_rest'] = isset($params['show_in_rest']) && !! $params['show_in_rest'] ? 1 : 0;
+                $input[$taxonomy]['sort'] = isset($params['sort']) && !! $params['sort'] ? 1 : 0;
+                $input[$taxonomy]['show_admin_column'] = isset($params['show_admin_column']) && !! $params['show_admin_column'] ? 1 : 0;
+                $input[$taxonomy]['show_in_nav_menus'] = isset($params['show_in_nav_menus']) && !! $params['show_in_nav_menus'] ? 1 : 0;
+                $input[$taxonomy]['rewrite']['with_front'] = isset($params['rewrite']['with_front']) && !! $params['rewrite']['with_front'] ? 1 : 0;
+                $input[$taxonomy]['rewrite']['slug'] = isset($params['rewrite']['slug']) ? wpuxss_eml_sanitize_slug( $params['rewrite']['slug'], $taxonomy ) : '';
+            }
+
+            if ( ! $input[$taxonomy]['eml_media'] ) {
+                $input[$taxonomy]['taxonomy_auto_assign'] = isset($params['taxonomy_auto_assign']) && !! $params['taxonomy_auto_assign'] ? 1 : 0;
+            }
+
+
+            $input[$taxonomy]['assigned'] = isset($params['assigned']) && !! $params['assigned'] ? 1 : 0;
+            $input[$taxonomy]['admin_filter'] = isset($params['admin_filter']) && !! $params['admin_filter'] ? 1 : 0;
+            $input[$taxonomy]['media_uploader_filter'] = isset($params['media_uploader_filter']) && !! $params['media_uploader_filter'] ? 1 : 0;
+            $input[$taxonomy]['media_popup_taxonomy_edit'] = isset($params['media_popup_taxonomy_edit']) && !! $params['media_popup_taxonomy_edit'] ? 1 : 0;
+
+
+            if ( isset( $params['labels'] ) ) {
+
+                $default_labels = array(
+                    'menu_name' => $params['labels']['name'],
+                    'all_items' => 'All ' . $params['labels']['name'],
+                    'edit_item' => 'Edit ' . $params['labels']['singular_name'],
+                    'view_item' => 'View ' . $params['labels']['singular_name'],
+                    'update_item' => 'Update ' . $params['labels']['singular_name'],
+                    'add_new_item' => 'Add New ' . $params['labels']['singular_name'],
+                    'new_item_name' => 'New ' . $params['labels']['singular_name'] . ' Name',
+                    'parent_item' => 'Parent ' . $params['labels']['singular_name'],
+                    'search_items' => 'Search ' . $params['labels']['name']
+                );
+
+                foreach ( $params['labels'] as $label => $value ) {
+
+                    $input[$taxonomy]['labels'][$label] = sanitize_text_field($value);
+
+                    if ( empty($value) && isset($default_labels[$label]) )
+                        $input[$taxonomy]['labels'][$label] = sanitize_text_field($default_labels[$label]);
+                }
+            }
+        }
+
+        add_settings_error(
+            'media-taxonomies',
+            'eml_taxonomy_settings_saved',
+            __('Media Taxonomies settings saved.', 'enhanced-media-library'),
+            'updated'
+        );
+
+        return $input;
+    }
 }
 
 
 
-if ( ! class_exists( 'EML_Taxonomies' ) ) :
+/**
+ *  wpuxss_eml_sanitize_slug
+ *
+ *  @since    2.0.4
+ *  @created  07/02/15
+ */
 
-class EML_Taxonomies {
+if ( ! function_exists( 'wpuxss_eml_sanitize_slug' ) ) {
 
-    /**
-     * Processed terms.
-     *
-     * @var array
-     */
-    public $terms = array();
+    function wpuxss_eml_sanitize_slug( $slug, $fallback_slug = '' ) {
 
+        $slug_array = explode ( '/', $slug );
+        $slug_array = array_filter( $slug_array );
+        $slug_array = array_map ( 'remove_accents', $slug_array );
+        $slug_array = array_map ( 'sanitize_title_with_dashes', $slug_array );
 
+        $slug = implode ( '/', $slug_array );
 
+        if ( '' === $slug || false === $slug )
+            $slug = $fallback_slug;
 
-    /**
-     * Constructor. Intentionally left empty.
-     *
-     * @since   3.0
-     */
-
-    function __construct() {}
-
-
-
-    /**
-     *  The real constructor to initialize EML_Taxonomies.
-     *
-     *  @since  3.0
-     *  @date   30/01/17
-     *
-     *  @param  N/A
-     *  @return N/A
-     */
-
-    function initialize() {
-
-        // media assets
-        add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
-        add_action( 'wp_enqueue_media', array( $this, 'enqueue_media_assets' ) );
-
-        // taxonomies actions
-        add_action( 'init', array( $this, 'register_eml_media_taxonomies' ) );
-        add_action( 'init', array( $this, 'process_taxonomies' ), 999 );
-        add_action( 'init', array( $this, 'process_terms' ), 999 );
-        add_action( 'restrict_manage_posts', array( $this, 'restrict_manage_posts' ) );
-        add_action( 'parse_tax_query', array( $this, 'parse_tax_query' ) );
-        add_action( 'wp_ajax_save-attachment-compat', array( $this, 'ajax_save_attachment_compat' ), 0 );
-        add_action( 'wp_ajax_delete-post', array( $this, 'ajax_delete_post' ), 0 );
-        add_action( 'wp_ajax_save-attachment-order', array( $this, 'ajax_save_attachment_order' ), 0 );
-        add_action( 'pre_get_posts', array( $this, 'pre_get_posts' ), 99 );
-        add_action( 'print_media_templates', array( $this, 'print_media_templates' ) );
-
-        // taxonomies filters
-        add_filter( 'ajax_query_attachments_args', array( $this, 'ajax_query_attachments_args' ), 20 );
-        add_filter( 'wp_dropdown_cats', array( $this, 'wp_dropdown_cats' ), 10, 2 );
-        add_filter( 'attachment_fields_to_edit', array( $this, 'attachment_fields_to_edit' ), 10, 2 );
+        return $slug;
     }
+}
 
 
 
-    /**
-     *  Enqueues taxonomies scripts for media library list mode.
-     *
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  N/A
-     *  @return N/A
-     */
+/**
+ *  wpuxss_eml_lib_options_validate
+ *
+ *  @since    2.2.1
+ */
 
-    function enqueue_admin_assets() {
+if ( ! function_exists( 'wpuxss_eml_lib_options_validate' ) ) {
 
-        global $current_screen;
+    function wpuxss_eml_lib_options_validate( $input ) {
 
+        foreach ( (array)$input as $key => $option ) {
 
-        $media_library_mode = get_user_option( 'media_library_mode', get_current_user_id() ) ? get_user_option( 'media_library_mode', get_current_user_id() ) : 'grid';
+            if ( 'media_orderby' === $key || 'media_order' === $key || 'grid_caption_type' === $key ) {
+                $input[$key] = sanitize_text_field( $option );
 
-
-        // scripts for media library list Mode
-        if ( isset( $current_screen ) && 'upload' === $current_screen->base && 'list' === $media_library_mode ) {
-
-            wp_enqueue_script( 'eml-media-list-mode' );
-
-            wp_localize_script( 'eml-media-list-mode', 'wpuxss_eml_media_list_l10n', array(
-                '$_GET'             => wp_json_encode($_GET),
-                'uncategorized'     => __( 'All Uncategorized', 'enhanced-media-library' ),
-                'reset_all_filters' => __( 'Reset All Filters', 'enhanced-media-library' )
-            ));
-        }
-
-
-        // scripts for media library Grid Mode
-        if ( isset( $current_screen ) && 'upload' === $current_screen->base && 'grid' === $media_library_mode ) {
-            wp_dequeue_script( 'media' );
-            wp_enqueue_script( 'eml-media-grid-mode' );
-        }
-    }
-
-
-
-    /**
-     *  Enqueues media scripts.
-     *
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  N/A
-     *  @return N/A
-     */
-
-    function enqueue_media_assets() {
-
-        global $wp_version,
-               $current_screen;
-
-
-        $lib_options = eml()->get_option( 'lib_options' );
-
-        if ( ( ! (bool) $lib_options['frontend_scripts'] || ! current_user_can( 'manage_categories' ) ) && ! is_admin() ) {
-            return;
-        }
-
-
-        $media_library_mode = get_user_option( 'media_library_mode', get_current_user_id() ) ? get_user_option( 'media_library_mode', get_current_user_id() ) : 'grid';
-        $tax_options = eml()->get_option( 'tax_options' );
-        $media_views_localize = $this->get_media_views_localize();
-
-
-        // scripts
-        wp_enqueue_script( 'eml-media-models' );
-        wp_enqueue_script( 'eml-media-views' );
-
-
-        // localize
-        wp_localize_script( 'eml-media-models', 'wpuxss_eml_media_models_l10n', array(
-            'media_orderby'   => $lib_options['media_orderby'],
-            'media_order'     => $lib_options['media_order'],
-            'bulk_edit_nonce' => wp_create_nonce( 'eml-bulk-edit-nonce' )
-        ));
-
-        wp_localize_script( 'eml-media-views', 'wpuxss_eml_media_views_l10n', array(
-            'terms'                     => $media_views_localize['terms'],
-            'taxonomies'                => $media_views_localize['taxonomies'],
-            'filter_taxonomies'         => $media_views_localize['filter_taxonomies'],
-            'compat_taxonomies'         => $media_views_localize['compat_taxonomies'],
-            'compat_taxonomies_to_hide' => $media_views_localize['compat_taxonomies_to_hide'],
-            'is_tax_compat'             => count( $media_views_localize['compat_taxonomies'] ) - count( $media_views_localize['compat_taxonomies_to_hide'] ) > 0 ? 1 : 0,
-            'force_filters'             => $tax_options['force_filters'],
-            'wp_version'                => $wp_version,
-            'uncategorized'             => __( 'All Uncategorized', 'enhanced-media-library' ),
-            'filter_by'                 => __( 'Filter by', 'enhanced-media-library' ),
-            'in'                        => __( 'All', 'enhanced-media-library' ),
-            'not_in'                    => __( 'Not in a', 'enhanced-media-library' ),
-            'reset_filters'             => __( 'Reset All Filters', 'enhanced-media-library' ),
-            'current_screen'            => isset( $current_screen ) ? $current_screen->id : ''
-        ));
-
-
-        // front-end styles
-        if ( ! is_admin() && (bool) $lib_options['frontend_scripts'] && current_user_can( 'manage_categories' ) ) {
-            wp_enqueue_style( 'eml-media' );
-            wp_enqueue_style( 'wp-jquery-ui-dialog' );
-        }
-    }
-
-
-
-    /**
-     *  Retrieves taxonomies and terms to pass them to media library's JS.
-     *
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  N/A
-     *  @return (array)
-     */
-
-    function get_media_views_localize() {
-
-        $taxonomies = array();
-        $processed_taxonomies = $this->get_processed_taxonomies( array( 'assigned' => true ) );
-        $filter_taxonomies = $this->get_processed_taxonomies( array( 'assigned' => true, 'media_uploader_filter' => true ) );
-        $compat_taxonomies_to_hide = $this->get_processed_taxonomies( array( 'assigned' => true, 'media_popup_taxonomy_edit' => false ) );
-        $terms_id_tt_id = $this->get_media_term_pairs( $this->terms, 'id=>tt_id' );
-
-
-        $walker = new EML_Walker_Media_Taxonomy_Uploader_Filter;
-
-
-        foreach ( array_keys( $filter_taxonomies ) as $taxonomy_name ) {
-
-            $taxonomy_terms = $this->get_taxonomy_terms( $taxonomy_name );
-
-            if ( ! empty( $taxonomy_terms ) ) {
-
-                $formatted_terms = array();
-                $terms_id_name = $this->get_media_term_pairs( $taxonomy_terms, 'id=>name' );
-                $taxonomy = get_taxonomy( $taxonomy_name );
-
-                $tax_args = array( 'taxonomy' => $taxonomy_name );
-                $tax_args['disabled'] = ! current_user_can( $taxonomy->cap->assign_terms );
-                $tax_args['selected_cats'] = array();
-
-                $output = call_user_func_array( array( $walker, 'walk' ), array( $taxonomy_terms, 0, $tax_args ) );
-                $html = str_replace( '}{', '},{', $output );
-                $html = '[' . $html . ']';
-                $formatted_terms = json_decode( $html, true );
-
-                $taxonomies[$taxonomy_name] = array(
-                    'singular_name' => $taxonomy->labels->singular_name,
-                    'plural_name'   => $taxonomy->labels->name,
-                    'term_list'     => $formatted_terms,
-                    'terms'         => $terms_id_name
-                );
             }
-        } // foreach
+            elseif ( 'filters_to_show' === $key ) {
+                $allowed = array( 'types', 'dates', 'authors', 'taxonomies' );
+                $input[$key] = array_values( array_intersect( $option, $allowed ) );
+            }
+            elseif ( 'search_in' === $key ) {
+                $allowed = array( 'titles', 'captions', 'descriptions', 'authors', 'taxonomies' );
+                $input[$key] = array_values( array_intersect( $option, $allowed ) );
+            }
+            else {
+                $input[$key] = isset( $option ) && !! $option ? 1 : 0;
+            }
+        }
 
-        return array(
-            'terms'                     => $terms_id_tt_id,
-            'taxonomies'                => $taxonomies,
-            'filter_taxonomies'         => array_keys( $filter_taxonomies ),
-            'compat_taxonomies'         => array_keys( $processed_taxonomies ),
-            'compat_taxonomies_to_hide' => array_keys( $compat_taxonomies_to_hide )
+        if ( ! isset( $input['media_order'] ) ) {
+            $input['media_order'] = 'ASC';
+        }
+
+        add_settings_error(
+            'media-library',
+            'eml_library_settings_saved',
+            __('Media Library settings saved.', 'enhanced-media-library'),
+            'updated'
         );
+
+        return $input;
     }
+}
 
 
 
-    /**
-     *  Registers media taxonomies created by plugin.
-     *
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  N/A
-     *  @return N/A
-     */
+/**
+ *  wpuxss_eml_tax_options_validate
+ *
+ *  @type     callback function
+ *  @since    2.0.4
+ *  @created  28/01/15
+ */
 
-    function register_eml_media_taxonomies() {
+if ( ! function_exists( 'wpuxss_eml_tax_options_validate' ) ) {
 
-        foreach ( $this->get_processed_taxonomies( array( 'eml_media' => true ) ) as $taxonomy => $params ) {
+    function wpuxss_eml_tax_options_validate( $input ) {
 
-            if ( empty( $params['labels']['singular_name'] ) || empty( $params['labels']['name'] ) ) {
-                continue;
-            }
-
-            register_taxonomy(
-                $taxonomy,
-                'attachment',
-                array(
-                    'labels' => $params['labels'],
-                    'public' => true,
-                    'show_admin_column' => (bool) $params['show_admin_column'],
-                    'show_in_nav_menus' => (bool) $params['show_in_nav_menus'],
-                    'hierarchical' => (bool) $params['hierarchical'],
-                    'update_count_callback' => '_eml_update_attachment_term_count',
-                    'sort' => (bool) $params['sort'],
-                    'show_in_rest' => (bool) $params['show_in_rest'],
-                    'query_var' => $taxonomy,
-                    'rewrite' => array(
-                        'slug' => $params['rewrite']['slug'],
-                        'with_front' => (bool) $params['rewrite']['with_front']
-                    )
-                )
-            );
-        } // endforeach
-    }
-
-
-
-    /**
-     *  Processes all potential media taxonomies created by third-parties.
-     *
-     *  @type   action callback
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  N/A
-     *  @return N/A
-     */
-
-    function process_taxonomies() {
-
-        global $wp_taxonomies;
-
-
-        $processed_taxonomies = eml()->get_option( 'taxonomies' );
-        $taxonomies = get_taxonomies( array( 'show_ui' => true, 'public' => true ), 'objects' );
-        $change = false;
-
-
-        foreach ( $taxonomies as $taxonomy => $params ) {
-
-            $object_type = (array) $params->object_type;
-            $media_only = ( in_array( 'attachment', $object_type ) && count( $object_type ) == 1 ) ? 1 : 0;
-
-
-            if ( array_key_exists( $taxonomy, $processed_taxonomies ) ) {
-
-                if ( ! isset( $processed_taxonomies[$taxonomy]['media_only'] ) ||
-                     (bool) $media_only != (bool) $processed_taxonomies[$taxonomy]['media_only'] ) {
-
-                    $processed_taxonomies[$taxonomy]['media_only'] = $media_only;
-                    $change = true;
-                }
-
-                // if ( (bool) $assigned != (bool) $processed_taxonomies[$taxonomy]['assigned'] ) {
-                //
-                //     $processed_taxonomies[$taxonomy]['assigned'] = $assigned;
-                //     $change = true;
-                // }
-
-                continue;
-            }
-
-            $change = true;
-            $assigned = in_array( 'attachment', $object_type ) ? 1 : 0;
-
-            $processed_taxonomies[$taxonomy] = array(
-                'assigned' => $assigned,
-                'eml_media' => 0,
-                'media_only' => $media_only,
-                'tax_archive' => $media_only,
-                'admin_filter' => 0,
-                'media_uploader_filter' => 0,
-                'media_popup_taxonomy_edit' => 0,
-                'taxonomy_auto_assign' => 0
-            );
-        } // foreach
-
-
-        // TODO: test this carefully
-        // clean currently unregistered, not public,
-        // and non-eml taxonomies out of processed taxonomies
-        foreach( $processed_taxonomies as $taxonomy => $params ) {
-
-            // if ( ! (bool) $params['eml_media'] && ! taxonomy_exists( $taxonomy ) ) {
-            if ( (bool) $params['eml_media'] ) {
-                continue;
-            }
-
-            if ( array_key_exists( $taxonomy, $taxonomies ) ) {
-                continue;
-            }
-
-            $change = true;
-
-            unset( $processed_taxonomies[$taxonomy] );
+        foreach ( (array)$input as $key => $option ) {
+            $input[$key] = isset( $option ) && !! $option ? 1 : 0;
         }
 
-
-        foreach ( $processed_taxonomies as $taxonomy_name => $params ) {
-
-            // if ( (bool) $params['eml_media'] ) {
-            //     continue;
-            // }
-
-
-            // if ( ! taxonomy_exists( $taxonomy_name ) ) {
-            //     continue;
-            // }
-
-
-            if ( (bool) $params['assigned'] ) {
-
-                if ( ! register_taxonomy_for_object_type( $taxonomy_name, 'attachment' ) ) {
-                    continue;
-                }
-
-                $taxonomy = get_taxonomy( $taxonomy_name );
-
-                if ( in_array( 'post', $taxonomy->object_type ) ) {
-                    $wp_taxonomies[$taxonomy_name]->update_count_callback = '_eml_update_post_term_count';
-                }
-
-                if ( 1 == count( $taxonomy->object_type ) ) {
-                    $wp_taxonomies[$taxonomy_name]->update_count_callback = '_eml_update_attachment_term_count';
-                }
-            }
-
-
-            if ( ! (bool) $params['assigned'] ) {
-
-                if ( ! unregister_taxonomy_for_object_type( $taxonomy_name, 'attachment' ) ) {
-                    continue;
-                }
-
-                $taxonomy = get_taxonomy( $taxonomy_name );
-
-                if ( in_array( 'post', $taxonomy->object_type ) ) {
-                    unset( $wp_taxonomies[$taxonomy_name]->update_count_callback );
-                }
-            }
-        } // foreach
-
-
-        if ( $change ) {
-
-            update_option( 'wpuxss_eml_taxonomies', $processed_taxonomies );
-            eml()->update_option( 'taxonomies', $processed_taxonomies );
-        }
+        return $input;
     }
+}
 
 
 
-    /**
-     *  Retrieves processed taxonomies filtered by params.
-     *
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  $args (array) : array( 'eml_media' => true, 'assigned' => true, etc. )
-     *  @return $taxonomies (array)
-     */
+/**
+ *  wpuxss_eml_ajax_query_attachments_args
+ *
+ *  @since    2.3.2
+ *  @created  24/09/16
+ */
 
-    function get_processed_taxonomies( $args = array() ) {
+add_filter( 'ajax_query_attachments_args', 'wpuxss_eml_ajax_query_attachments_args' );
 
-        $taxonomies = eml()->get_option( 'taxonomies' );
+if ( ! function_exists( 'wpuxss_eml_ajax_query_attachments_args' ) ) {
 
+    function wpuxss_eml_ajax_query_attachments_args( $query ) {
 
-        if ( empty( $args ) ) {
-            return $taxonomies;
-        }
-
-        foreach( $taxonomies as $taxonomy => $params ) {
-
-            foreach( $args as $arg => $value ) {
-
-                if ( (bool) $params[$arg] !== $value ) {
-                    unset( $taxonomies[$taxonomy] );
-                }
-            }
-        }
-
-        return $taxonomies;
-    }
-
-
-
-    /**
-     *  Saves terms of all processed taxonomies.
-     *
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  N/A
-     *  @return N/A
-     */
-
-    function process_terms() {
-
-        $processed_taxonomies = $this->get_processed_taxonomies( array( 'assigned' => true ) );
-        $processed_terms = (array) get_terms( array_keys( $processed_taxonomies ), array( 'fields'=>'all', 'get'=>'all' ) );
-
-        $this->terms = $processed_terms;
-    }
-
-
-
-    /**
-     *  Filters terms per processed taxonomy.
-     *
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  $taxonomy (string)
-     *  @return $processed_terms (array)
-     */
-
-    function get_taxonomy_terms( $taxonomy ) {
-
-        $processed_terms = $this->terms;
-
-
-        foreach( $processed_terms as $key => $term ) {
-
-            if ( $taxonomy !== $term->taxonomy ) {
-                unset( $processed_terms[$key] );
-            }
-        }
-
-        return array_values( $processed_terms );
-    }
-
-
-
-    /**
-     *  Retrieves term by slug from terms list.
-     *
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  $slug (string)
-     *  @param  $taxonomy (string)
-     *  @return (array)
-     */
-
-    function get_term_by_slug( $slug, $taxonomy ) {
-
-        $processed_terms = $this->get_taxonomy_terms( $taxonomy );
-
-
-        foreach ( $processed_terms as $key => $term ) {
-
-            if ( $slug === $term->slug ) {
-                return $processed_terms[$key];
-            }
-        }
-
-        return null;
-    }
-
-
-
-    /**
-     *  Enhances tax_query for attachment ajax requests.
-     *
-     *  @type   filter callback
-     *  @since  3.0
-     *  @date   24/09/16
-     */
-
-    function ajax_query_attachments_args( $query ) {
-
-        $processed_taxonomies = $this->get_processed_taxonomies( array( 'assigned' => true ) );
-
+        $wpuxss_eml_taxonomies = get_option( 'wpuxss_eml_taxonomies', array() );
+        $wpuxss_eml_lib_options = get_option( 'wpuxss_eml_lib_options' );
+        $tax_query = array();
         $eml_query = isset( $_REQUEST['query'] ) ? (array) $_REQUEST['query'] : array();
+        $processed_taxonomies = get_object_taxonomies( 'attachment', 'object' );
         $keys = array(
-            'uncategorized'
+            'uncategorized',
+            'author'
         );
-        // foreach ( get_taxonomies_for_attachments( 'objects' ) as $t ) {
-        //     if ( $t->query_var && isset( $query[ $t->query_var ] ) ) {
-        //         $keys[] = $t->query_var;
-        //     }
-        // }
+
+
         foreach ( $processed_taxonomies as $taxonomy => $params ) {
             if ( isset( $eml_query[$taxonomy] ) ) {
                 $keys[] = $taxonomy;
             }
         }
+
         $eml_query = array_intersect_key( $eml_query, array_flip( $keys ) );
-        $query = array_merge ( $query, $eml_query );
+        $query = array_merge( $query, $eml_query );
 
         $uncategorized = ( isset( $query['uncategorized'] ) && $query['uncategorized'] ) ? 1 : 0;
-
-        $tax_query = array();
 
 
         foreach ( $processed_taxonomies as $taxonomy_name => $params ) {
 
-            // $taxonomy = get_taxonomy( $taxonomy_name );
-            $terms = $this->get_taxonomy_terms( $taxonomy_name );
-            $terms_id_tt_id = $this->get_media_term_pairs( $terms, 'id=>tt_id' );
-
+            if ( ! array_key_exists( $taxonomy_name, $wpuxss_eml_taxonomies ) ) {
+                continue;
+            }
 
             if ( $uncategorized ) {
 
-                if ( ! empty( $terms_id_tt_id ) ) {
+                $terms = get_terms( $taxonomy_name, array( 'fields' => 'ids', 'get' => 'all' ) );
+
+                if ( ! empty( $terms ) ) {
 
                     $tax_query[] = array(
                         'taxonomy' => $taxonomy_name,
                         'field' => 'term_id',
-                        'terms' => $terms_id_tt_id,
+                        'terms' => $terms,
                         'operator' => 'NOT IN'
                     );
 
@@ -579,30 +265,36 @@ class EML_Taxonomies {
 
                 if ( isset( $query[$taxonomy_name] ) && $query[$taxonomy_name] ) {
 
-                    if( is_numeric( $query[$taxonomy_name] ) ||
-                        is_array( $query[$taxonomy_name] ) ) {
+                    if( is_numeric( $query[$taxonomy_name] ) || is_array( $query[$taxonomy_name] ) ) {
+
+                        $field = ctype_digit( implode( '', (array) $query[$taxonomy_name] ) ) ? 'term_id' : 'slug';
 
                         $tax_query[] = array(
                             'taxonomy' => $taxonomy_name,
-                            'field' => 'term_id',
-                            'terms' => (array) $query[$taxonomy_name]
+                            'field' => $field,
+                            'terms' => (array) $query[$taxonomy_name],
+                            'include_children' => (bool) $wpuxss_eml_lib_options['include_children']
                         );
                     }
                     elseif ( 'not_in' === $query[$taxonomy_name] ) {
 
+                        $terms = get_terms( $taxonomy_name, array('fields'=>'ids','get'=>'all') );
+
                         $tax_query[] = array(
                             'taxonomy' => $taxonomy_name,
                             'field' => 'term_id',
-                            'terms' => $terms_id_tt_id,
+                            'terms' => $terms,
                             'operator' => 'NOT IN',
                         );
                     }
                     elseif ( 'in' === $query[$taxonomy_name] ) {
 
+                        $terms = get_terms( $taxonomy_name, array('fields'=>'ids','get'=>'all') );
+
                         $tax_query[] = array(
                             'taxonomy' => $taxonomy_name,
                             'field' => 'term_id',
-                            'terms' => $terms_id_tt_id,
+                            'terms' => $terms,
                             'operator' => 'IN',
                         );
                     }
@@ -610,11 +302,6 @@ class EML_Taxonomies {
                     unset( $query[$taxonomy_name] );
                 }
             }
-
-            // if ( isset( $query[$taxonomy->query_var] ) ) {
-            //     unset( $query[$taxonomy->query_var] );
-            // }
-
         } // endforeach
 
         if ( ! empty( $tax_query ) ) {
@@ -625,18 +312,24 @@ class EML_Taxonomies {
 
         return $query;
     }
+}
 
 
 
-    /**
-     *  Adds taxonomy filters to media library List Mode.
-     *
-     *  @type   action callback
-     *  @since  3.0
-     *  @date   24/09/16
-     */
+/**
+ *  wpuxss_eml_restrict_manage_posts
+ *
+ *  Adds taxonomy filters to Media Library List View
+ *
+ *  @since    1.0
+ *  @created  11/08/13
+ */
 
-    function restrict_manage_posts() {
+add_action( 'restrict_manage_posts', 'wpuxss_eml_restrict_manage_posts', 10, 2 );
+
+if ( ! function_exists( 'wpuxss_eml_restrict_manage_posts' ) ) {
+
+    function wpuxss_eml_restrict_manage_posts( $post_type, $which ) {
 
         global $current_screen,
                $wp_query;
@@ -649,54 +342,103 @@ class EML_Taxonomies {
             return;
         }
 
-        $tax_options = eml()->get_option( 'tax_options' );
-        $processed_taxonomies = $this->get_processed_taxonomies( array( 'assigned' => true ) );
+        $wpuxss_eml_lib_options = get_option( 'wpuxss_eml_lib_options' );
+        $wpuxss_eml_taxonomies = get_option( 'wpuxss_eml_taxonomies', array() );
+
         $uncategorized = ( isset( $_REQUEST['attachment-filter'] ) && 'uncategorized' === $_REQUEST['attachment-filter'] ) ? 1 : 0;
 
 
-        foreach ( $processed_taxonomies as $taxonomy_name => $params ) {
+        if ( current_user_can( 'manage_options' ) && in_array( 'authors', $wpuxss_eml_lib_options['filters_to_show'] ) ) {
 
-            $taxonomy = get_taxonomy( $taxonomy_name );
+            echo "<label for='author' class='screen-reader-text'>" . __('Filter by author','enhanced-media-library') . "</label>";
+
+            wp_dropdown_users(
+                array(
+                    'show_option_all'         => __( 'All Authors', 'enhanced-media-library' ),
+                    'name'                    => 'author',
+                    'class'                   => 'attachment-filters',
+                    'who'                     => 'authors',
+                    'hide_if_only_one_author' => true
+                )
+            );
+        }
 
 
-            if ( $processed_taxonomies[$taxonomy_name]['admin_filter'] ) {
+        if ( in_array( 'taxonomies', $wpuxss_eml_lib_options['filters_to_show'] ) ) {
 
-                echo "<label for='{$taxonomy_name}' class='screen-reader-text'>" . __('Filter by','enhanced-media-library') . " {$taxonomy->labels->singular_name}</label>";
+            foreach ( get_object_taxonomies( 'attachment', 'object' ) as $taxonomy ) {
 
-                $selected = ( ! $uncategorized && isset( $wp_query->query[$taxonomy_name] ) ) ? $wp_query->query[$taxonomy_name] : 0;
+                if ( ! (bool) $wpuxss_eml_taxonomies[$taxonomy->name]['admin_filter'] )
+                    continue;
+
+                echo "<label for='" . esc_attr($taxonomy->name) ."' class='screen-reader-text'>" . __('Filter by','enhanced-media-library') . " " . esc_html($taxonomy->labels->singular_name) . "</label>";
+
+                $selected = ( ! $uncategorized && isset( $wp_query->query[$taxonomy->name] ) ) ? $wp_query->query[$taxonomy->name] : 0;
 
                 wp_dropdown_categories(
                     array(
-                        'show_option_all'    =>  __( 'Filter by', 'enhanced-media-library' ) . ' ' . $taxonomy->labels->singular_name,
-                        'show_option_in'     =>  '— ' . __( 'All', 'enhanced-media-library' ) . ' ' . $taxonomy->labels->name . ' —',
-                        'show_option_not_in' =>  '— ' . __( 'Not in a', 'enhanced-media-library' ) . ' ' . $taxonomy->labels->singular_name . ' —',
-                        'taxonomy'           =>  $taxonomy_name,
-                        'name'               =>  $taxonomy_name,
+                        'show_option_all'    =>  __( 'Filter by', 'enhanced-media-library' ) . ' ' . esc_html($taxonomy->labels->singular_name),
+                        'show_option_in'     =>  '— ' . __( 'All', 'enhanced-media-library' ) . ' ' . esc_html($taxonomy->labels->name) . ' —',
+                        'show_option_not_in' =>  '— ' . __( 'Not in a', 'enhanced-media-library' ) . ' ' . esc_html($taxonomy->labels->singular_name) . ' —',
+                        'taxonomy'           =>  $taxonomy->name,
+                        'name'               =>  $taxonomy->name,
                         'orderby'            =>  'name',
                         'selected'           =>  $selected,
                         'hierarchical'       =>  true,
-                        'show_count'         =>  (bool) $tax_options['show_count'],
+                        'show_count'         =>  (bool) $wpuxss_eml_lib_options['show_count'],
                         'hide_empty'         =>  false,
                         'hide_if_empty'      =>  true,
-                        'class'              =>  'eml-taxonomy-filters',
-                        'walker'             =>  new EML_Walker_CategoryDropdown()
+                        'class'              =>  'attachment-filters eml-taxonomy-filters',
+                        'walker'             =>  new wpuxss_eml_Walker_CategoryDropdown()
                     )
                 );
-            }
-        } // endforeach
+            } // endforeach
+        } // endif
     }
+}
 
 
 
-    /**
-     *  Modifies taxonomy filters in media library List Mode.
-     *
-     *  @type   filter callback
-     *  @since  3.0
-     *  @date   24/09/16
-     */
+/**
+ *  wpuxss_eml_disable_months_dropdown
+ *
+ *  @since    2.6
+ *  @created  07/03/18
+ */
 
-    function wp_dropdown_cats( $output, $r ) {
+add_action( 'load-upload.php', 'wpuxss_eml_disable_months_dropdown' );
+
+if ( ! function_exists( 'wpuxss_eml_disable_months_dropdown' ) ) {
+
+    function wpuxss_eml_disable_months_dropdown() {
+
+        $wpuxss_eml_lib_options = get_option( 'wpuxss_eml_lib_options' );
+
+        if( isset( $wpuxss_eml_lib_options['filters_to_show'] ) &&
+            ! in_array( 'dates', $wpuxss_eml_lib_options['filters_to_show'] ) ) {
+            add_filter( 'disable_months_dropdown', '__return_true' );
+        }
+    }
+}
+
+
+
+
+
+/**
+ *  wpuxss_eml_dropdown_cats
+ *
+ *  Modifies taxonomy filters in Media Library List View
+ *
+ *  @since    2.0.4.5
+ *  @created  19/04/15
+ */
+
+add_filter( 'wp_dropdown_cats', 'wpuxss_eml_dropdown_cats', 10, 2 );
+
+if ( ! function_exists( 'wpuxss_eml_dropdown_cats' ) ) {
+
+    function wpuxss_eml_dropdown_cats( $output, $r ) {
 
         global $current_screen;
 
@@ -719,8 +461,8 @@ class EML_Taxonomies {
 
         while ( strlen( $whole_select ) >= 7 && false !== ( $option_pos = strpos( $whole_select, '<option', 7 ) ) ) {
 
-            $options_array[] = substr( $whole_select, 0, $option_pos );
-            $whole_select = substr( $whole_select, $option_pos );
+            $options_array[] = substr($whole_select, 0, $option_pos);
+            $whole_select = substr($whole_select, $option_pos);
         }
         $options_array[] = $whole_select;
 
@@ -729,18 +471,18 @@ class EML_Taxonomies {
 
         $new_output = '';
 
-        if ( isset( $r['show_option_in'] ) && (bool) $r['show_option_in'] ) {
+        if ( isset( $r['show_option_in'] ) && $r['show_option_in'] ) {
 
             $show_option_in = $r['show_option_in'];
-            $selected = ( 'in' === strval($r['selected']) ) ? " selected='selected'" : '';
-            $new_output .= "\t<option value='in'$selected>$show_option_in</option>\n";
+            $selected = ( isset($r['selected']) && 'in' === strval($r['selected']) ) ? " selected='selected'" : '';
+            $new_output .= "\t<option value='in'{$selected}>" . esc_html($show_option_in) . "</option>\n";
         }
 
-        if ( isset( $r['show_option_not_in'] ) && (bool) $r['show_option_not_in'] ) {
+        if ( isset( $r['show_option_not_in'] ) && $r['show_option_not_in'] ) {
 
             $show_option_not_in = $r['show_option_not_in'];
-            $selected = ( 'not_in' === strval($r['selected']) ) ? " selected='selected'" : '';
-            $new_output .= "\t<option value='not_in'$selected>$show_option_not_in</option>\n";
+            $selected = ( isset($r['selected']) && 'not_in' === strval($r['selected']) ) ? " selected='selected'" : '';
+            $new_output .= "\t<option value='not_in'{$selected}>" . esc_html($show_option_not_in) . "</option>\n";
         }
 
         array_splice( $options_array, 2, 0, $new_output );
@@ -749,32 +491,86 @@ class EML_Taxonomies {
 
         return $output;
     }
+}
 
 
 
-    /**
-     *  Parses tax_query.
-     *
-     *  @type   action callback
-     *  @since  3.0
-     *  @date   24/09/16
-     */
+/**
+ *  wpuxss_eml_parse_tax_query
+ *
+ *  @since    2.6.4
+ *  @created  23/05/18
+ */
 
-    function parse_tax_query( $query ) {
+add_action( 'parse_tax_query', 'wpuxss_eml_parse_tax_query' );
+
+if ( ! function_exists( 'wpuxss_eml_parse_tax_query' ) ) {
+
+    function wpuxss_eml_parse_tax_query( $query ) {
+
+        if ( ! $query->is_main_query() ) {
+            return;
+        }
+
+
+        $wpuxss_eml_tax_options = get_option( 'wpuxss_eml_tax_options', array() );
+
+        if ( (bool) $wpuxss_eml_tax_options['tax_archives'] ) {
+
+            $wpuxss_eml_lib_options = get_option( 'wpuxss_eml_lib_options', array() );
+
+            foreach ( get_option('wpuxss_eml_taxonomies', array() ) as $taxonomy => $params ) {
+
+                if ( (bool) $params['assigned'] && (bool) $params['eml_media'] && is_tax( $taxonomy ) ) {
+
+                    $query->tax_query->queries[0]['include_children'] = (bool) $wpuxss_eml_lib_options['include_children'];
+                }
+            }
+        }
+    }
+}
+
+
+
+/**
+ *  wpuxss_eml_backend_parse_tax_query
+ *
+ *  @since    2.6.4
+ *  @created  23/05/18
+ */
+
+add_action( 'parse_tax_query', 'wpuxss_eml_backend_parse_tax_query' );
+
+if ( ! function_exists( 'wpuxss_eml_backend_parse_tax_query' ) ) {
+
+    function wpuxss_eml_backend_parse_tax_query( $query ) {
 
         global $current_screen;
 
 
-        if ( ! isset( $current_screen ) || ! is_admin() || ! isset( $query->query_vars['order'] ) ) {
+        if ( ! is_admin() ) {
+            return;
+        }
+
+
+        if ( ! isset( $current_screen ) || 'upload' !== $current_screen->base ) {
+            return;
+        }
+
+        if ( ! $query->is_main_query() ) {
             return;
         }
 
 
         $media_library_mode = get_user_option( 'media_library_mode' ) ? get_user_option( 'media_library_mode' ) : 'grid';
 
-        if ( 'upload' !== $current_screen->base || 'list' !== $media_library_mode ) {
+        if (  'list' !== $media_library_mode ) {
             return;
         }
+
+
+        $uncategorized = ( isset( $_REQUEST['attachment-filter'] ) && 'uncategorized' === $_REQUEST['attachment-filter'] ) ? 1 : 0;
+        $wpuxss_eml_lib_options = get_option( 'wpuxss_eml_lib_options' );
 
 
         if ( isset( $_REQUEST['category'] ) )
@@ -786,7 +582,7 @@ class EML_Taxonomies {
         if ( isset( $query->query_vars['taxonomy'] ) && isset( $query->query_vars['term'] ) ) {
 
             $tax = $query->query_vars['taxonomy'];
-            $term = $this->get_term_by_slug( $query->query_vars['term'], $tax );
+            $term = get_term_by( 'slug', $query->query_vars['term'], $tax );
 
             if ( $term ) {
 
@@ -802,69 +598,74 @@ class EML_Taxonomies {
         }
 
 
-        $tax_query = array();
-        $uncategorized = ( isset( $_REQUEST['attachment-filter'] ) && 'uncategorized' === $_REQUEST['attachment-filter'] ) ? 1 : 0;
+        foreach ( get_object_taxonomies( 'attachment','names' ) as $taxonomy ) {
 
-        foreach ( $this->get_processed_taxonomies( array( 'assigned' => true ) ) as $taxonomy_name => $params ) {
+            if ( ! isset( $_REQUEST['filter_action'] ) && isset( $_REQUEST[$taxonomy] ) ) {
 
-            $terms = $this->get_taxonomy_terms( $taxonomy_name );
-            $terms_id_tt_id = $this->get_media_term_pairs( $terms, 'id=>tt_id' );
-
-            if ( ! isset( $_REQUEST['filter_action'] ) && isset( $_REQUEST[$taxonomy_name] ) ) {
-
-                $term = $this->get_term_by_slug( $_REQUEST[$taxonomy_name], $taxonomy_name );
+                $term = get_term_by( 'slug', $_REQUEST[$taxonomy], $taxonomy );
 
                 if ( $term ) {
 
                     $tax_query[] = array(
-                        'taxonomy' => $taxonomy_name,
+                        'taxonomy' => $taxonomy,
                         'field' => 'term_id',
-                        'terms' => array( $term->term_id )
+                        'terms' => array( $term->term_id ),
+                        'include_children' => (bool) $wpuxss_eml_lib_options['include_children']
                     );
 
-                    $query->query_vars[$taxonomy_name] = $term->term_id;
-                    $query->query[$taxonomy_name] = $term->term_id;
+                    $query->query_vars[$taxonomy] = $term->term_id;
+                    $query->query[$taxonomy] = $term->term_id;
                 }
             }
             elseif ( $uncategorized ) {
 
+                $terms = get_terms( $taxonomy, array('fields'=>'ids','get'=>'all') );
+
                 $tax_query[] = array(
-                    'taxonomy' => $taxonomy_name,
+                    'taxonomy' => $taxonomy,
                     'field' => 'term_id',
-                    'terms' => $terms_id_tt_id,
-                    'operator' => 'NOT IN',
+                    'terms' => $terms,
+                    'operator' => 'NOT IN'
                 );
 
-                if ( isset( $query->query[$taxonomy_name] ) ) unset( $query->query[$taxonomy_name] );
-                if ( isset( $query->query_vars[$taxonomy_name] ) ) unset( $query->query_vars[$taxonomy_name] );
+                if ( isset( $query->query[$taxonomy] ) ) unset( $query->query[$taxonomy] );
+                if ( isset( $query->query_vars[$taxonomy] ) ) unset( $query->query_vars[$taxonomy] );
             }
-            elseif ( isset( $query->query[$taxonomy_name] ) && $query->query[$taxonomy_name] ) {
+            else {
 
-                if ( is_numeric( $query->query[$taxonomy_name] ) ) {
+                if ( isset( $query->query[$taxonomy] ) && $query->query[$taxonomy] ) {
 
-                    $tax_query[] = array(
-                        'taxonomy' => $taxonomy_name,
-                        'field' => 'term_id',
-                        'terms' => array( $query->query[$taxonomy_name] )
-                    );
-                }
-                elseif ( 'not_in' === $query->query[$taxonomy_name] ) {
+                    if ( is_numeric( $query->query[$taxonomy] ) ) {
 
-                    $tax_query[] = array(
-                        'taxonomy' => $taxonomy_name,
-                        'field' => 'term_id',
-                        'terms' => $terms_id_tt_id,
-                        'operator' => 'NOT IN',
-                    );
-                }
-                elseif ( 'in' === $query->query[$taxonomy_name] ) {
+                        $tax_query[] = array(
+                            'taxonomy' => $taxonomy,
+                            'field' => 'term_id',
+                            'terms' => array( $query->query[$taxonomy] ),
+                            'include_children' => (bool) $wpuxss_eml_lib_options['include_children']
+                        );
+                    }
+                    elseif ( 'not_in' === $query->query[$taxonomy] ) {
 
-                    $tax_query[] = array(
-                        'taxonomy' => $taxonomy_name,
-                        'field' => 'term_id',
-                        'terms' => $terms_id_tt_id,
-                        'operator' => 'IN',
-                    );
+                        $terms = get_terms( $taxonomy, array('fields'=>'ids','get'=>'all') );
+
+                        $tax_query[] = array(
+                            'taxonomy' => $taxonomy,
+                            'field' => 'term_id',
+                            'terms' => $terms,
+                            'operator' => 'NOT IN',
+                        );
+                    }
+                    elseif ( 'in' === $query->query[$taxonomy] ) {
+
+                        $terms = get_terms( $taxonomy, array('fields'=>'ids','get'=>'all') );
+
+                        $tax_query[] = array(
+                            'taxonomy' => $taxonomy,
+                            'field' => 'term_id',
+                            'terms' => $terms,
+                            'operator' => 'IN',
+                        );
+                    }
                 }
             }
         } // endforeach
@@ -873,90 +674,299 @@ class EML_Taxonomies {
             $query->tax_query = new WP_Tax_Query( $tax_query );
         }
     }
+}
 
 
 
-    /**
-     *  Prepares taxonomies for attachment edit.
-     *  Based on /wp-admin/includes/media.php
-     *
-     *  @type   filter callback
-     *  @since  3.0
-     *  @date   24/09/16
-     */
+/**
+ *  wpuxss_eml_attachment_fields_to_edit
+ *
+ *  Based on /wp-admin/includes/media.php
+ *
+ *  @since    1.0
+ *  @created  14/08/13
+ */
 
-    function attachment_fields_to_edit( $form_fields, $post ) {
+add_filter( 'attachment_fields_to_edit', 'wpuxss_eml_attachment_fields_to_edit', 10, 2 );
 
-        // $lib_options = eml()->get_option( 'lib_options' );
+if ( ! function_exists( 'wpuxss_eml_attachment_fields_to_edit' ) ) {
 
+    function wpuxss_eml_attachment_fields_to_edit( $form_fields, $post ) {
 
-        // if ( ! (bool) $lib_options['frontend_scripts'] && ! is_admin() ) {
-        // if ( ! is_admin() ) {
-        //     return $form_fields;
-        // }
-
-
-        $tax_options = eml()->get_option( 'tax_options' );
-        $walker = new EML_Walker_Term_Checklist;
-        // $processed_taxonomies = $this->get_processed_taxonomies( array( 'assigned' => true ) );
+        if ( ! function_exists( 'wp_terms_checklist' ) ) {
+            return $form_fields;
+        }
 
 
-        foreach( $form_fields as $taxonomy => $args ) {
+        $wpuxss_eml_tax_options = get_option('wpuxss_eml_tax_options');
 
-            if ( ! taxonomy_exists( $taxonomy ) /*|| ! array_key_exists( $taxonomy, $processed_taxonomies )*/ ) {
 
-                // unset( $form_fields[$taxonomy] ); // we don't need it, third-parties could need though
+        foreach( $form_fields as $field => $args ) {
+
+            if ( ! taxonomy_exists( $field ) ) {
                 continue;
             }
 
+            if ( (bool) $wpuxss_eml_tax_options['edit_all_as_hierarchical'] || (bool) $args['hierarchical'] ) {
 
-            // replace slugs with tag names for non-hierarchical taxonomies
-            if ( ! (bool) $args['hierarchical'] && ! (bool) $tax_options['edit_all_as_hierarchical'] ) {
+                ob_start();
 
-                $values = wp_get_object_terms( $post->ID, $taxonomy, array( 'fields' => 'names' ) );
-                $form_fields[$taxonomy]['value'] = join(', ', $values);
-                continue;
-            }
+                    wp_terms_checklist( $post->ID, array( 'taxonomy' => $field, 'checked_ontop' => false, 'walker' => new Walker_Media_Taxonomy_Checklist() ) );
 
+                    $content = ob_get_contents();
 
-            $terms = $this->get_taxonomy_terms( $taxonomy );
-            // $terms = get_terms($taxonomy, array( 'fields'=>'all', 'get'=>'all' ) );
+                    if ( $content )
+                        $html = '<ul class="term-list">' . $content . '</ul>';
+                    else
+                        $html = '<ul class="term-list"><li>No ' . esc_html($args['label']) . ' found. <a href="' . admin_url('/edit-tags.php?taxonomy='.$field.'&post_type=attachment') . '">' . __('Add some', 'enhanced-media-library') . '.</a></li></ul>';
 
-            if ( ! empty( $terms ) ) {
+                ob_end_clean();
 
-                $tax = get_taxonomy( $taxonomy );
-                $tax_args = array( 'taxonomy' => $taxonomy );
-                $tax_args['disabled'] = ! current_user_can( $tax->cap->assign_terms );
-                $tax_args['selected_cats'] = wp_get_object_terms( $post->ID, $taxonomy, array_merge( $tax_args, array( 'fields' => 'ids' ) ) );
-                $output = call_user_func_array( array( $walker, 'walk' ), array( $terms, 0, $tax_args ) );
-                // $output = wp_terms_checklist( $post->ID, array( 'taxonomy' => $taxonomy, 'checked_ontop' => false, 'echo' => false ) );
-                $output = '<ul class="term-list">' . $output . '</ul>';
+                unset( $form_fields[$field]['value'] );
+
+                $tax_field = $form_fields[$field];
+                unset( $form_fields[$field] );
+
+                $tax_field['input'] = 'html';
+                $tax_field['html'] = $html;
+
+                // re-order tax_field at the end
+                $form_fields = $form_fields + array( $field => $tax_field );
             }
             else {
-                $output = '<ul class="term-list"><li>No ' . $args['label'] . ' found.</li></ul>';
-            }
+                $values = wp_get_object_terms( $post->ID, $field, array( 'fields' => 'names' ) );
 
-            unset( $form_fields[$taxonomy]['value'] );
+                $tax_field = $form_fields[$field];
+                unset( $form_fields[$field] );
 
-            $form_fields[$taxonomy]['input'] = 'html';
-            $form_fields[$taxonomy]['html'] = $output;
+                $tax_field['value'] = join(', ', $values);
+
+                // re-order tax_field at the end
+                $form_fields = $form_fields + array( $field => $tax_field );
+            } // if
         } // foreach
 
         return $form_fields;
     }
+}
 
 
 
-    /**
-     *  Saves meta including categories for a single attachment.
-     *  Based on /wp-admin/includes/ajax-actions.php
-     *
-     *  @type   action callback
-     *  @since  3.0
-     *  @date   24/09/16
-     */
+/**
+ *  wpuxss_eml_Walker_CategoryDropdown
+ *
+ *  Based on /wp-includes/class-walker-category-dropdown.php
+ *
+ *  @since    2.3
+ *  @created  14/06/16
+ */
 
-    function ajax_save_attachment_compat() {
+if ( ! class_exists( 'wpuxss_eml_Walker_CategoryDropdown' ) ) {
+
+    class wpuxss_eml_Walker_CategoryDropdown extends Walker_CategoryDropdown {
+
+        function start_el( &$output, $category, $depth = 0, $args = array(), $id = 0 ) {
+
+            $wpuxss_eml_lib_options = get_option( 'wpuxss_eml_lib_options' );
+
+            $pad = str_repeat('&nbsp;', $depth * 3);
+
+            /** This filter is documented in wp-includes/category-template.php */
+            $cat_name = apply_filters( 'list_cats', $category->name, $category );
+
+            if ( isset( $args['value_field'] ) && isset( $category->{$args['value_field']} ) ) {
+                $value_field = $args['value_field'];
+            } else {
+                $value_field = 'term_id';
+            }
+
+            $output .= "\t<option class=\"level-$depth\" value=\"" . esc_attr( $category->{$value_field} ) . "\"";
+
+            // Type-juggling causes false matches, so we force everything to a string.
+            if ( (string) $category->{$value_field} === (string) $args['selected'] )
+                $output .= ' selected="selected"';
+            $output .= '>';
+            $output .= $pad.$cat_name;
+
+
+            if ( $args['show_count'] && (bool) $wpuxss_eml_lib_options['show_count'] ) {
+
+                $count = wpuxss_eml_get_media_term_count( $category->term_id, $category->term_taxonomy_id );
+                $output .= '&nbsp;&nbsp;('. number_format_i18n( $count ) .')';
+            }
+
+            $output .= "</option>\n";
+        }
+    }
+}
+
+
+
+/**
+ *  wpuxss_eml_get_media_term_count
+ *
+ *  @since    2.3
+ *  @created  14/06/16
+ */
+
+if ( ! function_exists( 'wpuxss_eml_get_media_term_count' ) ) {
+
+    function wpuxss_eml_get_media_term_count( $term_id, $tt_id ) {
+
+        global $wpdb;
+
+
+        $terms = array( $tt_id );
+        $children = array();
+        $wpuxss_eml_lib_options = get_option( 'wpuxss_eml_lib_options' );
+
+
+        if ( (bool) $wpuxss_eml_lib_options['include_children'] ) {
+            $children = $wpdb->get_results( $wpdb->prepare( "SELECT term_taxonomy_id FROM $wpdb->term_taxonomy WHERE parent = %d", (int) $term_id ) );
+        }
+
+
+        if ( ! empty( $children ) ) {
+
+            foreach ( $children as $child ) {
+                $terms[] = $child->term_taxonomy_id;
+            }
+        }
+
+        $terms_format = join( ', ', array_fill( 0, count( $terms ), '%d' ) );
+
+        $results = $wpdb->get_results( $wpdb->prepare(
+            "
+                SELECT ID FROM $wpdb->posts, $wpdb->term_relationships WHERE $wpdb->posts.ID = $wpdb->term_relationships.object_id AND post_type = 'attachment' AND ( post_status = 'publish' OR post_status = 'inherit' ) AND term_taxonomy_id IN ($terms_format) GROUP BY ID
+            ",
+            $terms
+        ) );
+
+        $count = $results ? $wpdb->num_rows : 0;
+
+        return $count;
+    }
+}
+
+
+
+/**
+ *  Walker_Media_Taxonomy_Checklist
+ *
+ *  Based on /wp-includes/category-template.php
+ *
+ *  @since    1.0
+ *  @created  09/09/13
+ */
+
+if ( ! class_exists( 'Walker_Media_Taxonomy_Checklist' ) ) {
+
+    class Walker_Media_Taxonomy_Checklist extends Walker {
+
+        var $tree_type = 'category';
+        var $db_fields = array ('parent' => 'parent', 'id' => 'term_id');
+
+        function start_lvl( &$output, $depth = 0, $args = array() ) {
+
+            $indent = str_repeat("\t", $depth);
+            $output .= "$indent<ul class='children'>\n";
+        }
+
+        function end_lvl( &$output, $depth = 0, $args = array() ) {
+
+            $indent = str_repeat("\t", $depth);
+            $output .= "$indent</ul>\n";
+        }
+
+        function start_el( &$output, $category, $depth = 0, $args = array(), $id = 0 ) {
+
+            extract($args);
+
+            if ( empty($taxonomy) )
+                $taxonomy = 'category';
+
+            $class = in_array( $category->term_id, $popular_cats ) ? ' class="popular-category"' : '';
+            $output .= "\n<li id='{$taxonomy}-{$category->term_id}'$class>" . "<label class='selectit'><input value='0' type='hidden' name='tax_input[{$taxonomy}][{$category->term_id}]' /><input value='1' type='checkbox' name='tax_input[{$taxonomy}][{$category->term_id}]' id='in-{$taxonomy}-{$category->term_id}'" . checked( in_array( $category->term_id, $selected_cats ), true, false ) . disabled( empty( $args['disabled'] ), false, false ) . " />" . esc_html( apply_filters('the_category', $category->name )) . "</label>";
+        }
+
+        function end_el( &$output, $category, $depth = 0, $args = array() ) {
+
+            $output .= "</li>\n";
+        }
+    }
+}
+
+
+
+/**
+ *  Walker_Media_Taxonomy_Uploader_Filter
+ *
+ *  Based on /wp-includes/category-template.php
+ *
+ *  @since    1.0.1
+ *  @created  05/11/13
+ */
+
+if ( ! class_exists( 'Walker_Media_Taxonomy_Uploader_Filter' ) ) {
+
+    class Walker_Media_Taxonomy_Uploader_Filter extends Walker {
+
+        var $tree_type = 'category';
+        var $db_fields = array ('parent' => 'parent', 'id' => 'term_id');
+
+
+        function start_lvl( &$output, $depth = 0, $args = array() ) {
+
+            $output .= "";
+        }
+
+        function end_lvl( &$output, $depth = 0, $args = array() ) {
+
+            $output .= "";
+        }
+
+        function start_el( &$output, $category, $depth = 0, $args = array(), $id = 0 ) {
+
+            extract($args);
+
+            $wpuxss_eml_lib_options = get_option( 'wpuxss_eml_lib_options' );
+            $indent = str_repeat('&nbsp;&nbsp;&nbsp;', $depth);
+
+            $count = ( (bool) $wpuxss_eml_lib_options['show_count'] ) ? '&nbsp;&nbsp;('. number_format_i18n( wpuxss_eml_get_media_term_count( $category->term_id, $category->term_taxonomy_id ) ) .')' : '';
+
+            $el = array(
+                'term_id' => intval( $category->term_id ),
+                'slug' => $category->slug,
+                'term_name' => esc_html( apply_filters( 'the_category', $category->name ) ),
+                'term_row' => $indent . esc_html( apply_filters( 'the_category', $category->name ) ) . $count
+            );
+
+            $output .= json_encode( $el );
+        }
+
+        function end_el( &$output, $category, $depth = 0, $args = array() ) {
+
+                $output .= "";
+        }
+    }
+}
+
+
+
+/**
+ *  wpuxss_eml_save_attachment_compat
+ *
+ *  Based on /wp-admin/includes/ajax-actions.php
+ *
+ *  @since    1.0.6
+ *  @created  06/14/14
+ */
+
+add_action( 'wp_ajax_save-attachment-compat', 'wpuxss_eml_save_attachment_compat', 0 );
+
+if ( ! function_exists( 'wpuxss_eml_save_attachment_compat' ) ) {
+
+    function wpuxss_eml_save_attachment_compat() {
 
         if ( ! isset( $_REQUEST['id'] ) )
             wp_send_json_error();
@@ -968,7 +978,7 @@ class EML_Taxonomies {
             wp_send_json_error();
 
 
-        $tax_options = eml()->get_option( 'tax_options' );
+        $wpuxss_eml_lib_options = get_option( 'wpuxss_eml_lib_options' );
         $attachment_data = $_REQUEST['attachments'][ $id ];
 
         check_ajax_referer( 'update-post_' . $id, 'nonce' );
@@ -993,31 +1003,21 @@ class EML_Taxonomies {
         wp_update_post( $post );
 
 
-        $processed_taxonomies = $this->get_processed_taxonomies( array( 'assigned' => true ) );
-        $processed_taxonomy_names = array_keys( $processed_taxonomies );
+        $media_taxonomy_names = get_object_taxonomies( 'attachment','names' );
 
+        if ( (bool) $wpuxss_eml_lib_options['show_count'] ) {
 
-        if ( (bool) $tax_options['show_count'] ) {
-
-            // $terms = get_terms( $processed_taxonomy_names, array( 'fields'=>'all', 'get'=>'all' ) );
-            // $terms = $this->terms;
-            $term_pairs = $this->get_media_term_pairs( $this->terms, 'id=>tt_id' );
+            $terms = get_terms( $media_taxonomy_names, array('fields'=>'all','get'=>'all') );
+            $term_pairs = wpuxss_eml_get_media_term_pairs( $terms, 'id=>tt_id' );
         }
 
 
-        foreach ( $processed_taxonomy_names as $taxonomy ) {
+        foreach ( $media_taxonomy_names as $taxonomy ) {
 
             if ( isset( $attachment_data[ $taxonomy ] ) ) {
 
-                // term names actually for non-hierarchical
-                // these are sanitized later with wp_set_object_terms
                 $term_ids = array_map( 'trim', preg_split( '/,+/', $attachment_data[ $taxonomy ] ) );
             }
-            // elseif ( isset( $_REQUEST['tax_input'] ) && isset( $_REQUEST['tax_input'][ $taxonomy ] ) ) {
-            //
-            //     $term_ids = array_keys( $_REQUEST['tax_input'][ $taxonomy ], 1 );
-            //     $term_ids = array_map( 'intval', $term_ids );
-            // }
             elseif ( isset( $_REQUEST['tax_input'] ) ) {
 
                 if ( ! isset( $_REQUEST['tax_input'][ $taxonomy ] ) ) {
@@ -1029,46 +1029,43 @@ class EML_Taxonomies {
                 }
             }
 
+            wp_set_object_terms( $id, $term_ids, $taxonomy, false );
 
-            $res = wp_set_object_terms( $id, $term_ids, $taxonomy, false );
+            if ( (bool) $wpuxss_eml_lib_options['show_count'] ) {
 
-
-            if ( (bool) $tax_options['show_count'] ) {
-
-                // foreach ( $res as $term_id ) {
-                //     $tcount[$term_id] = $this->get_media_term_count( $term_id, $term_pairs[$term_id] );
-                // }
-
-                // because it can't re-count term count for UNset terms
                 foreach( $term_pairs as $term_id => $tt_id) {
-                    $tcount[$term_id] = $this->get_media_term_count( $term_id, $tt_id );
+                    $tcount[$term_id] = wpuxss_eml_get_media_term_count( $term_id, $tt_id );
                 }
             }
         }
 
-
         if ( ! $attachment = wp_prepare_attachment_for_js( $id ) )
             wp_send_json_error();
 
-        if ( (bool) $tax_options['show_count'] )
+        if ( (bool) $wpuxss_eml_lib_options['show_count'] )
             $attachment['tcount'] = $tcount;
 
 
         wp_send_json_success( $attachment );
     }
+}
 
 
 
-    /**
-     *  Deletes attachment and cleans up its terms.
-     *  Based on /wp-admin/includes/ajax-actions.php
-     *
-     *  @type   action callback
-     *  @since  3.0
-     *  @date   24/09/16
-     */
+/**
+ *  wpuxss_eml_delete_post
+ *
+ *  Based on /wp-admin/includes/ajax-actions.php
+ *
+ *  @since    2.3
+ *  @created  17/06/16
+ */
 
-    function ajax_delete_post() {
+add_action( 'wp_ajax_delete-post', 'wpuxss_eml_delete_post', 0 );
+
+if ( ! function_exists( 'wpuxss_eml_delete_post' ) ) {
+
+    function wpuxss_eml_delete_post() {
 
         if ( empty( $action ) )
             $action = 'delete-post';
@@ -1087,16 +1084,16 @@ class EML_Taxonomies {
         if ( 'attachment' === $post->post_type ) {
 
             $response = array();
-            $tax_options = eml()->get_option('tax_options');
+            $wpuxss_eml_lib_options = get_option('wpuxss_eml_lib_options');
 
             if ( wp_delete_post( $id ) ) {
 
-                if ( (bool) $tax_options['show_count'] ) {
+                if ( (bool) $wpuxss_eml_lib_options['show_count'] ) {
 
-                    $terms = (array) get_terms( get_object_taxonomies( 'attachment', 'names' ), array( 'fields'=>'all', 'get'=>'all' ) );
+                    $terms = get_terms( get_object_taxonomies( 'attachment','names' ), array('fields'=>'all','get'=>'all') );
 
-                    foreach( $this->get_media_term_pairs( $terms, 'id=>tt_id' ) as $term_id => $tt_id ) {
-                        $response['tcount'][$term_id] = $this->get_media_term_count( $term_id, $tt_id );
+                    foreach( wpuxss_eml_get_media_term_pairs( $terms, 'id=>tt_id' ) as $term_id => $tt_id ) {
+                        $response['tcount'][$term_id] = wpuxss_eml_get_media_term_count( $term_id, $tt_id );
                     }
                 }
 
@@ -1110,19 +1107,24 @@ class EML_Taxonomies {
         else
             wp_die( 0 );
     }
+}
 
 
 
-    /**
-     *  Saves attachments order for custom order option.
-     *  Based on /wp-admin/includes/ajax-actions.php
-     *
-     *  @type   action callback
-     *  @since  3.0
-     *  @date   24/09/16
-     */
+/**
+ *  wpuxss_eml_save_attachment_order
+ *
+ *  Based on /wp-admin/includes/ajax-actions.php
+ *
+ *  @since    2.2
+ *  @created  11/02/16
+ */
 
-    function ajax_save_attachment_order() {
+add_action( 'wp_ajax_save-attachment-order', 'wpuxss_eml_save_attachment_order', 0 );
+
+if ( ! function_exists( 'wpuxss_eml_save_attachment_order' ) ) {
+
+    function wpuxss_eml_save_attachment_order() {
 
         global $wpdb;
 
@@ -1176,178 +1178,329 @@ class EML_Taxonomies {
         ) );
 
 
-        if ( ! $result ) {
+        if ( ! $result )
             wp_send_json_error();
-        }
 
         wp_send_json_success();
     }
+}
 
 
 
-    /**
-     *  Retrieves media term pairs.
-     *
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  $terms (array)
-     *  @param  $mode (string)
-     *  @return $term_pairs (array)
-     */
+/**
+ *  wpuxss_eml_get_eml_taxonomies
+ *
+ *  @since    2.2
+ *  @created  13/03/16
+ */
 
-    function get_media_term_pairs( $terms = array(), $mode = 'id=>tt_id' ) {
+if ( ! function_exists( 'wpuxss_eml_get_eml_taxonomies' ) ) {
 
-        $term_pairs = array();
+    function wpuxss_eml_get_eml_taxonomies( $all_media_taxonomies = array() ) {
+
+        if ( empty( $all_media_taxonomies ) )
+            $all_media_taxonomies = get_option( 'wpuxss_eml_taxonomies', array() );
+
+        $return = array_filter( $all_media_taxonomies, 'wpuxss_eml_filter_by_eml_taxonomies' );
+
+        return $return;
+    }
+}
+
+
+
+/**
+ *  wpuxss_eml_filter_by_eml_taxonomies
+ *
+ *  @since    2.2
+ *  @created  13/03/16
+ */
+
+if ( ! function_exists( 'wpuxss_eml_filter_by_eml_taxonomies' ) ) {
+
+    function wpuxss_eml_filter_by_eml_taxonomies( $taxonomy ) {
+
+        return (bool) $taxonomy['eml_media'];
+    }
+}
+
+
+
+/**
+ *  wpuxss_eml_get_media_term_pairs
+ *
+ *  @since    2.3
+ *  @created  19/06/16
+ */
+
+if ( ! function_exists( 'wpuxss_eml_get_media_term_pairs' ) ) {
+
+    function wpuxss_eml_get_media_term_pairs( $terms = array(), $mode = 'id=>tt_id' ) {
+
+        $result = array();
 
 
         foreach( $terms as $term ) {
 
-            if ( 'id=>tt_id' === $mode ) {
-                $term_pairs[$term->term_id] = $term->term_taxonomy_id;
+            if ( ! is_object( $term ) ) {
                 continue;
             }
 
-            if ( 'tt_id=>id' === $mode ) {
-                $term_pairs[$term->term_taxonomy_id] = $term->term_id;
-                continue;
-            }
+            if ( 'id=>tt_id' === $mode )
+                $result[$term->term_id] = $term->term_taxonomy_id;
 
-            if ( 'id=>name' === $mode ) {
-                $term_pairs[$term->term_id] = $term->name;
-                continue;
-            }
+            if ( 'tt_id=>id' === $mode )
+                $result[$term->term_taxonomy_id] = $term->term_id;
+
+            if ( 'id=>name' === $mode )
+                $result[$term->term_id] = $term->name;
         }
 
-        return $term_pairs;
+        return $result;
     }
+}
 
 
 
-    /**
-     *  Re-counts media term items.
-     *
-     *  @since  3.0
-     *  @date   24/09/16
-     *
-     *  @param  $term_id (int)
-     *  @param  $tt_id (int)
-     *  @return $count (int)
-     */
+/**
+ *  _eml_update_attachment_term_count
+ *
+ *  @since    2.3
+ *  @created  22/06/16
+ */
 
-    function get_media_term_count( $term_id, $tt_id ) {
+if ( ! function_exists( '_eml_update_attachment_term_count' ) ) {
+
+    function _eml_update_attachment_term_count( $terms, $taxonomy ) {
 
         global $wpdb;
 
+        foreach ( (array) $terms as $term ) {
 
-        $terms = array( $tt_id );
+            $count = 0;
 
-        $children = $wpdb->get_results( $wpdb->prepare( "SELECT term_taxonomy_id FROM $wpdb->term_taxonomy
-        WHERE parent = %d", (int) $term_id ) );
+            $count += (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_relationships, $wpdb->posts p1 WHERE p1.ID = $wpdb->term_relationships.object_id AND post_type = 'attachment' AND ( post_status = 'publish' OR post_status = 'inherit' ) AND term_taxonomy_id = %d", $term ) );
+
+            do_action( 'edit_term_taxonomy', $term, $taxonomy->name );
+            $wpdb->update( $wpdb->term_taxonomy, compact( 'count' ), array( 'term_taxonomy_id' => $term ) );
+            do_action( 'edited_term_taxonomy', $term, $taxonomy->name );
+        }
+    }
+}
 
 
-        if ( ! empty( $children ) ) {
 
-            foreach ( $children as $child ) {
-                $terms[] = $child->term_taxonomy_id;
-            }
+/**
+ *  _eml_update_post_term_count
+ *
+ *  @since    2.3
+ *  @created  22/06/16
+ */
+
+if ( ! function_exists( '_eml_update_post_term_count' ) ) {
+
+    function _eml_update_post_term_count( $terms, $taxonomy ) {
+
+        global $wpdb;
+
+        $object_types = (array) $taxonomy->object_type;
+
+        foreach ( $object_types as &$object_type )
+            list( $object_type ) = explode( ':', $object_type );
+
+        $object_types = array_unique( $object_types );
+
+        if ( false !== ( $check_attachments = array_search( 'attachment', $object_types ) ) )
+            unset( $object_types[ $check_attachments ] );
+
+        if ( $object_types )
+            $object_types = esc_sql( array_filter( $object_types, 'post_type_exists' ) );
+
+        foreach ( (array) $terms as $term ) {
+
+            $count = 0;
+
+            if ( $object_types )
+                $count += (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_relationships, $wpdb->posts WHERE $wpdb->posts.ID = $wpdb->term_relationships.object_id AND post_status = 'publish' AND post_type IN ('" . implode("', '", $object_types ) . "') AND term_taxonomy_id = %d", $term ) );
+
+            do_action( 'edit_term_taxonomy', $term, $taxonomy->name );
+            $wpdb->update( $wpdb->term_taxonomy, compact( 'count' ), array( 'term_taxonomy_id' => $term ) );
+            do_action( 'edited_term_taxonomy', $term, $taxonomy->name );
+        }
+    }
+}
+
+
+
+// TODO: Quick Edit for the List mode (MediaFrame.EditAttachments)
+// add_filter( 'media_row_actions', 'wpuxss_eml_media_row_actions', 10, 2 );
+//
+// if ( ! function_exists( 'wpuxss_eml_media_row_actions' ) ) {
+//
+//     function wpuxss_eml_media_row_actions( $actions, $post ) {
+//
+//         $first = array_splice ( $actions, 0, 1 );
+//         $actions = array_merge ( $first, array( 'eml_quick_edit' => '<a href="#" data-attachment-id="' . $post->ID . '">Quick Edit</a>' ), $actions );
+//
+//         return $actions;
+//     }
+// }
+
+
+
+/**
+ *  wpuxss_eml_the_posts
+ *
+ *  Natural sort order for titles (List Mode)
+ *
+ *  @since    2.5
+ *  @created  12/01/18
+ */
+
+add_filter( 'the_posts', 'wpuxss_eml_the_posts', 10, 2 );
+
+if ( ! function_exists( 'wpuxss_eml_the_posts' ) ) {
+
+    function wpuxss_eml_the_posts( $posts, $query ) {
+
+        $wpuxss_eml_lib_options = get_option('wpuxss_eml_lib_options');
+
+
+        if ( ! (bool) $wpuxss_eml_lib_options['natural_sort'] ||
+             ! isset($query->query_vars['orderby']) ||
+             'title' !== $query->query_vars['orderby'] ||
+             'attachment' !== $query->query_vars['post_type'] ) {
+
+            return $posts;
         }
 
-        $terms_format = join( ', ', array_fill( 0, count( $terms ), '%d' ) );
 
-        $results = $wpdb->get_results( $wpdb->prepare(
-            "
-                SELECT ID FROM $wpdb->posts, $wpdb->term_relationships WHERE $wpdb->posts.ID = $wpdb->term_relationships.object_id AND post_type = 'attachment' AND ( post_status = 'publish' OR post_status = 'inherit' ) AND term_taxonomy_id IN ($terms_format) GROUP BY ID
-            ",
-            $terms
-        ) );
+        usort( $posts, 'wpuxss_eml_cmp' );
 
-        $count = $results ? $wpdb->num_rows : 0;
+        if ( "desc" === strtolower( $query->query_vars['order'] ) ) {
+            $posts = array_reverse( $posts );
+        }
 
-        return $count;
+        return $posts;
     }
+}
 
 
 
-    /**
-     *  Modifies $query for taxonomy archive page (front-end).
-     *
-     *  @type   action callback
-     *  @since  3.0
-     *  @date   24/09/16
-     */
+/**
+ *  wpuxss_eml_cmp
+ *
+ *  Apply natural compare to post titles
+ *
+ *  @since    2.7
+ *  @created  15/06/18
+ */
 
-    function pre_get_posts( $query ) {
+if ( ! function_exists( 'wpuxss_eml_cmp' ) ) {
+
+    function wpuxss_eml_cmp( $a, $b ) {
+
+        return strnatcmp( $a->post_title, $b->post_title );
+    }
+}
+
+
+
+/**
+ *  wpuxss_eml_pre_get_posts
+ *
+ *  Taxonomy archive specific query (front-end)
+ *  Ensure correct items order
+ *
+ *  @since    1.0
+ *  @created  03/08/13
+ */
+
+add_action( 'pre_get_posts', 'wpuxss_eml_pre_get_posts', 99 );
+
+if ( ! function_exists('wpuxss_eml_pre_get_posts') ) {
+
+    function wpuxss_eml_pre_get_posts( $query ) {
 
         global $current_screen;
 
 
-        // front-end archives
-        if ( ! is_admin() && $query->is_main_query() ) {
+        if ( ! $query->is_main_query() ) {
+            return;
+        }
 
-            $processed_taxonomies = $this->get_processed_taxonomies( array( 'media_only' => true, 'assigned' => true ) );
+        if ( is_admin() ) {
+            $media_library_mode = get_user_option( 'media_library_mode'  ) ? get_user_option( 'media_library_mode'  ) : 'grid';
+        }
 
-            foreach ( $processed_taxonomies as $taxonomy_name => $params ) {
+        if ( is_admin() && ! ( isset( $current_screen ) && 'upload' === $current_screen->base && 'list' === $media_library_mode ) ) {
+            return;
+        }
 
-                $taxonomy = get_taxonomy( $taxonomy_name );
 
-                if ( is_tax( $taxonomy_name ) && (bool) $params['tax_archive'] ) {
+        // front-end only
+        if ( ! is_admin() ) {
 
-                    $query->set( 'post_type', 'attachment' );
-                    $query->set( 'post_status', 'inherit' );
+            $wpuxss_eml_tax_options = get_option('wpuxss_eml_tax_options');
+
+            if ( (bool) $wpuxss_eml_tax_options['tax_archives'] ) {
+
+                $wpuxss_eml_taxonomies = get_option('wpuxss_eml_taxonomies');
+
+                foreach ( (array) $wpuxss_eml_taxonomies as $taxonomy => $params ) {
+
+                    if ( (bool) $params['assigned'] && (bool) $params['eml_media'] && is_tax( $taxonomy ) ) {
+
+                        $query->set( 'post_type', 'attachment' );
+                        $query->set( 'post_status', 'inherit' );
+                    }
                 }
             }
         }
 
 
-        // order
-        if ( is_admin() && $query->is_main_query() &&  'attachment' === $query->get('post_type') ) {
-
-            $media_library_mode = get_user_option( 'media_library_mode'  ) ? get_user_option( 'media_library_mode'  ) : 'grid';
-            $eml_lib_options = eml()->get_option('lib_options');
-
-            $query_orderby = $query->get('orderby');
-            $query_order = $query->get('order');
-
-            if ( isset( $current_screen ) && 'upload' === $current_screen->base && 'list' === $media_library_mode && empty( $query_orderby ) && empty( $query_order ) ) {
-
-                $orderby = ( 'menuOrder' === $eml_lib_options['media_orderby'] ) ? 'menu_order' : $eml_lib_options['media_orderby'];
-                $order = $eml_lib_options['media_order'];
-
-                $query->set('orderby', $orderby );
-                $query->set('order', $order );
-            }
+        // both front-end and back-end
+        if ( 'attachment' !== $query->get('post_type') ) {
+            return;
         }
+
+
+        $query_orderby = $query->get('orderby');
+        $query_order = $query->get('order');
+
+        if ( $query_orderby && $query_order ) {
+            return;
+        }
+
+
+        $wpuxss_eml_lib_options = get_option( 'wpuxss_eml_lib_options', array() );
+
+        $orderby = ( 'menuOrder' === $wpuxss_eml_lib_options['media_orderby'] ) ? 'menu_order' : esc_attr( $wpuxss_eml_lib_options['media_orderby'] );
+        $order = esc_attr( $wpuxss_eml_lib_options['media_order'] );
+
+        $query->set('orderby', $orderby );
+        $query->set('order', $order );
     }
+}
 
 
-    /**
-     *  Modifies $query for taxonomy archive page (front-end).
-     *
-     *  @type   action callback
-     *  @since  3.0
-     *  @date   19/01/17
-     */
 
-    function print_media_templates() {
+/**
+ *  wpuxss_eml_print_media_templates
+ *
+ *  @since    2.4
+ *  @created  07/01/17
+ */
 
-        global $wp_version;
+add_action( 'print_media_templates', 'wpuxss_eml_print_media_templates' );
 
+if ( ! function_exists( 'wpuxss_eml_print_media_templates' ) ) {
 
-        if ( version_compare( $wp_version, '4.3', '<' ) ) {
+    function wpuxss_eml_print_media_templates() {
 
-            $remove_button = '<a class="close media-modal-icon" href="#" title="' . esc_attr__('Remove') . '"></a>';
+        $remove_button = '<button type="button" class="button-link attachment-close media-modal-icon"><span class="screen-reader-text">' . __( 'Remove' ) . '</span></button>';
 
-            $deselect_button = '<a class="check" href="#" title="' . esc_attr__('Deselect') . '" tabindex="-1"><div class="media-modal-icon"></div></a>';
-
-        }
-        else {
-
-            $remove_button = '<button type="button" class="button-link attachment-close media-modal-icon"><span class="screen-reader-text">' . __( 'Remove' ) . '</span></button>';
-
-            $deselect_button = '<button type="button" class="button-link check" tabindex="-1"><span class="media-modal-icon"></span><span class="screen-reader-text">' . __( 'Deselect' ) . '</span></button>';
-
-        } ?>
+        $deselect_button = '<button type="button" class="button-link check" tabindex="-1"><span class="media-modal-icon"></span><span class="screen-reader-text">' . __( 'Deselect' ) . '</span></button>'; ?>
 
 
         <script type="text/html" id="tmpl-attachment-grid-view">
@@ -1358,23 +1511,36 @@ class EML_Taxonomies {
                         <i class="eml-icon dashicons dashicons-edit edit" data-name="edit"></i>
                     <# } #>
                 </div>
-                <div class="thumbnail">
+
+                <# show_caption = parseInt(wpuxss_eml_media_grid_l10n.grid_show_caption);
+                caption_type = wpuxss_eml_media_grid_l10n.grid_caption_type;
+                caption = data[caption_type].length <= 15 ? data[caption_type] : data[caption_type].substring(0, 15) + '...';
+                non_image_caption = ( 'image' !== data.type && caption ) ? caption : data.filename;
+                title = show_caption ? data[caption_type] : ''; #>
+                <div class="thumbnail" title="{{ title }}">
                     <# if ( data.uploading ) { #>
                         <div class="media-progress-bar"><div style="width: {{ data.percent }}%"></div></div>
                     <# } else if ( 'image' === data.type && data.sizes ) { #>
                         <div class="centered">
                             <img src="{{ data.size.url }}" draggable="false" alt="" />
                         </div>
+                        <# if ( show_caption && caption ) { #>
+                                <div class="filename">
+                                    <div>{{ caption }}</div>
+                                </div>
+                        <# } #>
                     <# } else { #>
                         <div class="centered">
                             <# if ( data.image && data.image.src && data.image.src !== data.icon ) { #>
-                                <img src="{{ data.image.src }}" class="thumbnail" draggable="false" />
+                                <img src="{{ data.image.src }}" class="thumbnail" draggable="false" alt="" />
+                            <# } else if ( data.sizes && data.sizes.medium ) { #>
+                                <img src="{{ data.sizes.medium.url }}" class="thumbnail" draggable="false" alt="" />
                             <# } else { #>
-                                <img src="{{ data.icon }}" class="icon" draggable="false" />
+                                <img src="{{ data.icon }}" class="icon" draggable="false" alt="" />
                             <# } #>
                         </div>
                         <div class="filename">
-                            <div>{{ data.filename }}</div>
+                            <div>{{ non_image_caption }}</div>
                         </div>
                     <# } #>
                 </div>
@@ -1404,248 +1570,116 @@ class EML_Taxonomies {
             } #>
         </script>
 
+        <script type="text/html" id="tmpl-eml-media-selection">
+
+            <div class="selection-info">
+                <span class="count"></span>
+            </div>
+            <div class="selection-view"></div>
+
+        </script>
+
+        <script type="text/html" id="tmpl-eml-grid-attachment-details">
+
+            <h2>
+                <?php _e( 'Attachment Details' ); ?>
+                <span class="settings-save-status">
+                    <span class="spinner"></span>
+                    <span class="saved"><?php esc_html_e('Saved.'); ?></span>
+                </span>
+            </h2>
+            <div class="attachment-info">
+                <div class="thumbnail thumbnail-{{ data.type }}">
+                    <# if ( data.uploading ) { #>
+                        <div class="media-progress-bar"><div></div></div>
+                    <# } else if ( 'image' === data.type && data.sizes ) { #>
+                        <img src="{{ data.size.url }}" draggable="false" alt="" />
+                    <# } else { #>
+                        <img src="{{ data.icon }}" class="icon" draggable="false" alt="" />
+                    <# } #>
+                </div>
+                <div class="details">
+                    <div class="filename">{{ data.filename }}</div>
+                    <div class="uploaded">{{ data.dateFormatted }}</div>
+
+                    <div class="file-size">{{ data.filesizeHumanReadable }}</div>
+                    <# if ( 'image' === data.type && ! data.uploading ) { #>
+                        <# if ( data.width && data.height ) { #>
+                            <div class="dimensions">{{ data.width }} &times; {{ data.height }}</div>
+                        <# } #>
+
+                        <# if ( data.can.save && data.sizes ) { #>
+                            <a class="edit-attachment" href="{{ data.editLink }}&amp;image-editor" target="_blank"><?php _e( 'Edit Image' ); ?></a>
+                        <# } #>
+                    <# } #>
+
+                    <# if ( data.fileLength ) { #>
+                        <div class="file-length"><?php _e( 'Length:' ); ?> {{ data.fileLength }}</div>
+                    <# } #>
+
+                    <# if ( ! data.uploading && data.can.remove ) { #>
+                        <?php if ( MEDIA_TRASH ): ?>
+                        <# if ( 'trash' === data.status ) { #>
+                            <button type="button" class="button-link untrash-attachment"><?php _e( 'Untrash' ); ?></button>
+                        <# } else { #>
+                            <button type="button" class="button-link trash-attachment"><?php _ex( 'Trash', 'verb' ); ?></button>
+                        <# } #>
+                        <?php else: ?>
+                            <button type="button" class="button-link delete-attachment"><?php _e( 'Delete Permanently' ); ?></button>
+                        <?php endif; ?>
+                    <# } #>
+
+                    <a class="eml-toggle-collapse" href="javascript:;"><?php _e( 'More Details', 'enhanced-media-library' ); ?> &darr;</a>
+
+                    <div class="compat-meta">
+                        <# if ( data.compat && data.compat.meta ) { #>
+                            {{{ data.compat.meta }}}
+                        <# } #>
+                    </div>
+                </div>
+            </div>
+
+            <div class="eml-collapse" style="display:none;">
+                <label class="setting" data-setting="url">
+                    <span class="name"><?php _e('URL'); ?></span>
+                    <input type="text" value="{{ data.url }}" readonly />
+                </label>
+                <# var maybeReadOnly = data.can.save || data.allowLocalEdits ? '' : 'readonly'; #>
+                <?php if ( post_type_supports( 'attachment', 'title' ) ) : ?>
+                <label class="setting" data-setting="title">
+                    <span class="name"><?php _e('Title'); ?></span>
+                    <input type="text" value="{{ data.title }}" {{ maybeReadOnly }} />
+                </label>
+                <?php endif; ?>
+                <# if ( 'audio' === data.type ) { #>
+                <?php foreach ( array(
+                    'artist' => __( 'Artist' ),
+                    'album' => __( 'Album' ),
+                ) as $key => $label ) : ?>
+                <label class="setting" data-setting="<?php echo esc_attr( $key ) ?>">
+                    <span class="name"><?php echo $label ?></span>
+                    <input type="text" value="{{ data.<?php echo $key ?> || data.meta.<?php echo $key ?> || '' }}" />
+                </label>
+                <?php endforeach; ?>
+                <# } #>
+                <label class="setting" data-setting="caption">
+                    <span class="name"><?php _e('Caption'); ?></span>
+                    <textarea {{ maybeReadOnly }}>{{ data.caption }}</textarea>
+                </label>
+                <# if ( 'image' === data.type ) { #>
+                    <label class="setting" data-setting="alt">
+                        <span class="name"><?php _e('Alt Text'); ?></span>
+                        <input type="text" value="{{ data.alt }}" {{ maybeReadOnly }} />
+                    </label>
+                <# } #>
+                <label class="setting" data-setting="description">
+                    <span class="name"><?php _e('Description'); ?></span>
+                    <textarea {{ maybeReadOnly }}>{{ data.description }}</textarea>
+                </label>
+            </div>
+
+        </script>
     <?php }
-
-} // class EML_Taxonomies
-
-
-endif; // class_exists
-
-
-
-
-
-if ( ! class_exists( 'EML_Walker_CategoryDropdown' ) ) :
-
-class EML_Walker_CategoryDropdown extends Walker_CategoryDropdown {
-
-    function start_el( &$output, $category, $depth = 0, $args = array(), $id = 0 ) {
-
-        $tax_options = eml()->get_option( 'tax_options' );
-
-        $pad = str_repeat('&nbsp;', $depth * 3);
-
-        /** This filter is documented in wp-includes/category-template.php */
-        $cat_name = apply_filters( 'list_cats', $category->name, $category );
-
-        if ( isset( $args['value_field'] ) && isset( $category->{$args['value_field']} ) ) {
-            $value_field = $args['value_field'];
-        } else {
-            $value_field = 'term_id';
-        }
-
-        $output .= "\t<option class=\"level-$depth\" value=\"" . esc_attr( $category->{$value_field} ) . "\"";
-
-        // Type-juggling causes false matches, so we force everything to a string.
-        if ( (string) $category->{$value_field} === (string) $args['selected'] )
-            $output .= ' selected="selected"';
-        $output .= '>';
-        $output .= $pad.$cat_name;
-
-
-        if ( $args['show_count'] && (bool) $tax_options['show_count'] ) {
-
-            $count = eml()->taxonomies->get_media_term_count( $category->term_id, $category->term_taxonomy_id );
-            $output .= '&nbsp;&nbsp;('. number_format_i18n( $count ) .')';
-        }
-
-        $output .= "</option>\n";
-    }
-
-} // class EML_Walker_CategoryDropdown
-
-
-endif; // class_exists
-
-
-
-
-
-if ( ! class_exists( 'EML_Walker_Media_Taxonomy_Uploader_Filter' ) ) :
-
-class EML_Walker_Media_Taxonomy_Uploader_Filter extends Walker {
-
-    public $tree_type = 'category';
-    public $db_fields = array ('parent' => 'parent', 'id' => 'term_id'); //TODO: decouple this
-
-
-    public function start_lvl( &$output, $depth = 0, $args = array() ) {
-
-        $output .= "";
-    }
-
-    public function end_lvl( &$output, $depth = 0, $args = array() ) {
-
-        $output .= "";
-    }
-
-    public function start_el( &$output, $category, $depth = 0, $args = array(), $id = 0 ) {
-
-        if ( empty( $args['taxonomy'] ) ) {
-            $taxonomy = 'category';
-        } else {
-            $taxonomy = $args['taxonomy'];
-        }
-
-
-        $tax_options = eml()->get_option( 'tax_options' );
-        $indent = str_repeat('&nbsp;&nbsp;&nbsp;', $depth);
-
-        $count = ( (bool) $tax_options['show_count'] ) ? '&nbsp;&nbsp;('. number_format_i18n( eml()->taxonomies->get_media_term_count( $category->term_id, $category->term_taxonomy_id ) ) .')' : '';
-
-        $el = array(
-            'term_id' => $category->term_id,
-            'term_name' => $indent . esc_html( apply_filters( 'the_category', $category->name ) ) . $count
-        );
-
-        $output .= json_encode( $el );
-    }
-
-    public function end_el( &$output, $category, $depth = 0, $args = array() ) {
-
-            $output .= "";
-    }
-
-} // class EML_Walker_Media_Taxonomy_Uploader_Filter
-
-
-endif; // class_exists
-
-
-
-
-
-if ( ! class_exists( 'EML_Walker_Term_Checklist' ) ) :
-
-class EML_Walker_Term_Checklist extends Walker {
-
-    public $tree_type = 'category';
-    public $db_fields = array ('parent' => 'parent', 'id' => 'term_id'); //TODO: decouple this
-
-
-    public function start_lvl( &$output, $depth = 0, $args = array() ) {
-
-        $indent = str_repeat("\t", $depth);
-        $output .= "$indent<ul class='children'>\n";
-    }
-
-    public function end_lvl( &$output, $depth = 0, $args = array() ) {
-
-        $indent = str_repeat("\t", $depth);
-        $output .= "$indent</ul>\n";
-    }
-
-    public function start_el( &$output, $category, $depth = 0, $args = array(), $id = 0 ) {
-
-        if ( empty( $args['taxonomy'] ) ) {
-            $taxonomy = 'category';
-        } else {
-            $taxonomy = $args['taxonomy'];
-        }
-
-
-        $args['popular_cats'] = empty( $args['popular_cats'] ) ? array() : $args['popular_cats'];
-        $class = in_array( $category->term_id, $args['popular_cats'] ) ? ' class="popular-category"' : '';
-
-        $args['selected_cats'] = empty( $args['selected_cats'] ) ? array() : $args['selected_cats'];
-
-        if ( ! empty( $args['list_only'] ) ) {
-            $aria_cheched = 'false';
-            $inner_class = 'category';
-
-            if ( in_array( $category->term_id, $args['selected_cats'] ) ) {
-                $inner_class .= ' selected';
-                $aria_cheched = 'true';
-            }
-
-            /** This filter is documented in wp-includes/category-template.php */
-            $output .= "\n" . '<li' . $class . '>' .
-                '<div class="' . $inner_class . '" data-term-id=' . $category->term_id .
-                ' tabindex="0" role="checkbox" aria-checked="' . $aria_cheched . '">' .
-                esc_html( apply_filters( 'the_category', $category->name ) ) . '</div>';
-        } else {
-
-            // $tax_options = eml()->get_option( 'tax_options' );
-            //
-            // $count = ( (bool) $tax_options['show_count'] ) ? '&nbsp;&nbsp;('. number_format_i18n( eml()->taxonomies->get_media_term_count( $category->term_id, $category->term_taxonomy_id ) ) .')' : '';
-
-            /** This filter is documented in wp-includes/category-template.php */
-            $output .= "\n<li id='{$taxonomy}-{$category->term_id}'$class>" .
-                "<label class='selectit'><input value='0' type='hidden' name='tax_input[{$taxonomy}][{$category->term_id}]' /><input value='1' type='checkbox' name='tax_input[{$taxonomy}][{$category->term_id}]' id='in-{$taxonomy}-{$category->term_id}'" .
-                checked( in_array( $category->term_id, $args['selected_cats'] ), true, false ) .
-                disabled( empty( $args['disabled'] ), false, false ) . " />" .
-                esc_html( apply_filters( 'the_category', $category->name ) ) . "</label>";
-        }
-
-    }
-
-    public function end_el( &$output, $category, $depth = 0, $args = array() ) {
-        $output .= "</li>\n";
-    }
-
-} // class EML_Walker_Term_Checklist
-
-
-endif; // class_exists
-
-
-
-
-
-if ( ! function_exists( '_eml_update_attachment_term_count' ) ) :
-
-function _eml_update_attachment_term_count( $terms, $taxonomy ) {
-
-    global $wpdb;
-
-    foreach ( (array) $terms as $term ) {
-
-        $count = 0;
-
-        $count += (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_relationships, $wpdb->posts p1 WHERE p1.ID = $wpdb->term_relationships.object_id AND post_type = 'attachment' AND ( post_status = 'publish' OR post_status = 'inherit' ) AND term_taxonomy_id = %d", $term ) );
-
-        do_action( 'edit_term_taxonomy', $term, $taxonomy->name );
-        $wpdb->update( $wpdb->term_taxonomy, compact( 'count' ), array( 'term_taxonomy_id' => $term ) );
-        do_action( 'edited_term_taxonomy', $term, $taxonomy->name );
-    }
 }
 
-endif; // function_exists
-
-
-
-
-
-if ( ! function_exists( '_eml_update_post_term_count' ) ) :
-
-function _eml_update_post_term_count( $terms, $taxonomy ) {
-
-    global $wpdb;
-
-    $object_types = (array) $taxonomy->object_type;
-
-    foreach ( $object_types as &$object_type )
-        list( $object_type ) = explode( ':', $object_type );
-
-    $object_types = array_unique( $object_types );
-
-    if ( false !== ( $check_attachments = array_search( 'attachment', $object_types ) ) )
-        unset( $object_types[ $check_attachments ] );
-
-    if ( $object_types )
-        $object_types = esc_sql( array_filter( $object_types, 'post_type_exists' ) );
-
-    foreach ( (array) $terms as $term ) {
-
-        $count = 0;
-
-        if ( $object_types )
-            $count += (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_relationships, $wpdb->posts WHERE $wpdb->posts.ID = $wpdb->term_relationships.object_id AND post_status = 'publish' AND post_type IN ('" . implode("', '", $object_types ) . "') AND term_taxonomy_id = %d", $term ) );
-
-        do_action( 'edit_term_taxonomy', $term, $taxonomy->name );
-        $wpdb->update( $wpdb->term_taxonomy, compact( 'count' ), array( 'term_taxonomy_id' => $term ) );
-        do_action( 'edited_term_taxonomy', $term, $taxonomy->name );
-    }
-}
-
-endif; // function_exists
+?>
